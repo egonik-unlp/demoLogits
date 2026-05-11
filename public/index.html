@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LLM Sampling Visualizer</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>LLM Sampling Visualizer</h1>
+      <p class="sub">
+        Each token is sampled from a probability distribution. We ask the model
+        for the top-10 candidates per step and animate the roll.
+      </p>
+    </header>
+
+    <section class="controls">
+      <div class="prompt-row">
+        <textarea
+          id="message"
+          rows="2"
+          placeholder="Type a prompt, e.g. 'Write one short sentence about the sky.'"
+        >Write one short sentence about the sky.</textarea>
+        <button id="generate">Generate</button>
+      </div>
+
+      <div class="presets" id="presets">
+        <span class="presets-label">Try:</span>
+        <!-- Buttons populated from JS so we keep prompt text in one place. -->
+      </div>
+
+      <div class="presets" id="chatbot-presets">
+        <span class="presets-label">Chatbot:</span>
+        <!-- Chatbot scenario chips populated from JS. -->
+      </div>
+
+      <details id="scenario-context" class="scenario-context" hidden>
+        <summary>
+          <span class="ctx-summary-label">Conversation context</span>
+          <span id="ctx-summary-meta" class="ctx-summary-meta"></span>
+        </summary>
+        <div id="ctx-system"  class="ctx-block ctx-system"></div>
+        <div id="ctx-history" class="ctx-block ctx-history"></div>
+        <div id="ctx-message" class="ctx-block ctx-message"></div>
+      </details>
+
+      <div class="play-row">
+        <label class="speed">
+          Speed
+          <input id="speed" type="range" min="0.3" max="3" step="0.1" value="1" />
+          <span id="speed-val">1.0x</span>
+        </label>
+        <label class="speed">
+          Roll
+          <select id="roll-length">
+            <option value="off">Off</option>
+            <option value="short" selected>Short</option>
+            <option value="medium">Medium</option>
+            <option value="long">Long</option>
+          </select>
+        </label>
+        <label class="speed" title="Simulated temperature applied to the returned top-10 probabilities. Low T → distribution sharpens (deterministic). High T → flattens toward uniform (degenerate).">
+          Temp
+          <input id="temperature" type="range" min="0" max="100" step="1" value="50" />
+          <span id="temperature-val">1.00</span>
+        </label>
+        <label class="speed" title="Hard cap on the number of tokens the model is allowed to generate.">
+          Max tokens
+          <input id="max-tokens" type="number" min="1" max="4000" step="50" value="1000" />
+        </label>
+        <label class="speed" title="OpenAI model. Different models produce different probability distributions for the same prompt — useful for compare mode.">
+          Model
+          <select id="model">
+            <optgroup label="GPT-4.1">
+              <option value="gpt-4.1-nano">gpt-4.1-nano</option>
+              <option value="gpt-4.1-mini" selected>gpt-4.1-mini</option>
+              <option value="gpt-4.1">gpt-4.1</option>
+            </optgroup>
+            <optgroup label="GPT-5">
+              <option value="gpt-5-nano">gpt-5-nano</option>
+              <option value="gpt-5-mini">gpt-5-mini</option>
+              <option value="gpt-5">gpt-5</option>
+            </optgroup>
+            <optgroup label="GPT-4o">
+              <option value="gpt-4o-mini">gpt-4o-mini</option>
+              <option value="gpt-4o">gpt-4o</option>
+            </optgroup>
+            <optgroup label="Other">
+              <option value="gpt-3.5-turbo">gpt-3.5-turbo</option>
+            </optgroup>
+          </select>
+        </label>
+        <button id="pause" disabled>Pause</button>
+        <button id="step" disabled>Step</button>
+        <span id="status" class="status"></span>
+      </div>
+    </section>
+
+    <section class="output">
+      <div class="response-block">
+        <h2>Response</h2>
+        <div id="response" class="response"><span class="caret">▌</span></div>
+      </div>
+
+      <div class="dist-block">
+        <h2>
+          <span>Distribution <span id="token-idx" class="token-idx"></span></span>
+          <button id="record-dist" type="button" class="record-btn" title="Record an animation of this panel as a .webm video. Pick this tab/window in the picker dialog.">● Record</button>
+        </h2>
+
+        <div class="strip-wrap">
+          <div class="strip-marker-row" id="strip-marker"></div>
+          <div class="strip" id="strip"></div>
+          <div class="strip-meta">
+            <span id="entropy-text" class="entropy">H = — bits</span>
+            <span class="hint">▼ marks the sampled token</span>
+          </div>
+        </div>
+
+        <div id="dist" class="dist"></div>
+      </div>
+    </section>
+
+    <section class="metrics">
+      <h2>
+        <span>Per-token perplexity <span class="metrics-hint">log scale &middot; high spike = the model was unsure</span></span>
+        <button id="record-perp" type="button" class="record-btn" title="Record an animation of this plot as a .webm video. Pick this tab/window in the picker dialog.">● Record</button>
+      </h2>
+      <div id="perplexity-plot" class="perplexity-plot"></div>
+      <div class="metrics-meta">
+        <label class="compare-toggle" title="When on, the next Generate adds its perplexity line on top of the previous runs instead of replacing them.">
+          <input id="compare-mode" type="checkbox" />
+          Compare mode (overlay next run)
+        </label>
+        <button id="clear-runs" type="button" class="clear-runs">Clear runs</button>
+      </div>
+      <div id="runs-legend" class="runs-legend"></div>
+    </section>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
