@@ -69,6 +69,11 @@
           Max tokens
           <input id="max-tokens" type="number" min="1" max="4000" step="50" value="1000" />
         </label>
+        <label class="speed api-key-field" title="Your OpenAI API key. Stored only in this browser; sent through the Worker straight to OpenAI.">
+          API key
+          <input id="api-key" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
+          <span id="api-key-status" class="api-key-status">Not set</span>
+        </label>
         <label class="speed" title="OpenAI model. Different models produce different probability distributions for the same prompt — useful for compare mode.">
           Model
           <select id="model">

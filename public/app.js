@@ -216,6 +216,31 @@ const statusEl = $("#status");
 const responseEl = $("#response");
 const distEl = $("#dist");
 const tokenIdxEl = $("#token-idx");
+const apiKeyEl = $("#api-key");
+const apiKeyStatusEl = $("#api-key-status");
+
+const API_KEY_STORAGE = "demoLogits.openaiKey";
+const loadApiKey = () => {
+  try { return localStorage.getItem(API_KEY_STORAGE) ?? ""; } catch { return ""; }
+};
+const saveApiKey = (v) => {
+  try {
+    if (v) localStorage.setItem(API_KEY_STORAGE, v);
+    else localStorage.removeItem(API_KEY_STORAGE);
+  } catch {}
+};
+const updateApiKeyStatus = () => {
+  const v = apiKeyEl.value.trim();
+  apiKeyStatusEl.textContent = v ? "Saved" : "Not set";
+  apiKeyStatusEl.classList.toggle("ok", !!v);
+};
+apiKeyEl.value = loadApiKey();
+updateApiKeyStatus();
+apiKeyEl.addEventListener("blur", () => {
+  saveApiKey(apiKeyEl.value.trim());
+  updateApiKeyStatus();
+});
+apiKeyEl.addEventListener("input", updateApiKeyStatus);
 
 let speed = 1.0;
 speedEl.addEventListener("input", () => {
@@ -1018,6 +1043,16 @@ const setBusy = (busy) => {
 const generate = async () => {
   const message = messageEl.value.trim();
   if (!message) return;
+
+  const apiKey = apiKeyEl.value.trim();
+  if (!apiKey) {
+    setStatus("Paste an OpenAI API key to generate.", true);
+    apiKeyEl.focus();
+    return;
+  }
+  saveApiKey(apiKey);
+  updateApiKeyStatus();
+
   reset();
   setBusy(true);
   setStatus("Calling model…");
@@ -1028,7 +1063,7 @@ const generate = async () => {
 
   try {
     const maxTokens = Math.max(1, parseInt(maxTokensEl.value, 10) || 1000);
-    const requestBody = { message, maxTokens, model };
+    const requestBody = { message, maxTokens, model, apiKey };
     if (scenario) {
       requestBody.system = scenario.system;
       requestBody.history = scenario.history;
