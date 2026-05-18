@@ -49,6 +49,10 @@ type GenerateBody = {
   apiKey?: string;
 };
 
+type Env = {
+  OPENAI_API_KEY?: string;
+};
+
 const isValidHistory = (h: unknown): h is HistoryTurn[] =>
   Array.isArray(h) &&
   h.every(
@@ -60,7 +64,7 @@ const isValidHistory = (h: unknown): h is HistoryTurn[] =>
       typeof (t as HistoryTurn).content === "string",
   );
 
-const handleGenerate = async (req: Request): Promise<Response> => {
+const handleGenerate = async (req: Request, env: Env): Promise<Response> => {
   let body: GenerateBody;
   try {
     body = (await req.json()) as GenerateBody;
@@ -68,9 +72,16 @@ const handleGenerate = async (req: Request): Promise<Response> => {
     return json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const apiKey = body.apiKey;
-  if (typeof apiKey !== "string" || apiKey.length === 0) {
-    return json({ error: "OpenAI API key is required" }, { status: 400 });
+  // Server-configured key wins. Browser-supplied key is the fallback so
+  // hosted demos can offer "bring your own key" without a redeploy.
+  const serverKey = typeof env.OPENAI_API_KEY === "string" ? env.OPENAI_API_KEY.trim() : "";
+  const clientKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
+  const apiKey = serverKey || clientKey;
+  if (!apiKey) {
+    return json(
+      { error: "OpenAI API key is required", needsClientKey: true },
+      { status: 400 },
+    );
   }
   if (!apiKey.startsWith("sk-")) {
     return json({ error: "OpenAI API key must start with 'sk-'" }, { status: 400 });
@@ -137,10 +148,14 @@ const handleGenerate = async (req: Request): Promise<Response> => {
 };
 
 export default {
-  async fetch(req: Request): Promise<Response> {
+  async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     if (req.method === "POST" && url.pathname === "/generate") {
-      return handleGenerate(req);
+      return handleGenerate(req, env);
+    }
+    if (req.method === "GET" && url.pathname === "/config") {
+      const hasServerKey = typeof env.OPENAI_API_KEY === "string" && env.OPENAI_API_KEY.trim().length > 0;
+      return json({ hasServerKey });
     }
     return new Response("Not found", { status: 404 });
   },

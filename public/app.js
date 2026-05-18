@@ -230,10 +230,26 @@ const saveApiKey = (v) => {
   } catch {}
 };
 const updateApiKeyStatus = () => {
+  if (serverHasKey) {
+    apiKeyStatusEl.textContent = "Server-provided";
+    apiKeyStatusEl.classList.add("ok");
+    return;
+  }
   const v = apiKeyEl.value.trim();
   apiKeyStatusEl.textContent = v ? "Saved" : "Not set";
   apiKeyStatusEl.classList.toggle("ok", !!v);
 };
+
+// Set true once /config confirms the Worker has OPENAI_API_KEY bound.
+// When true, the input is hidden and we don't send `apiKey` in /generate.
+let serverHasKey = false;
+const apiKeyField = apiKeyEl.closest("label") ?? apiKeyEl;
+const setServerHasKey = (v) => {
+  serverHasKey = !!v;
+  apiKeyField.style.display = serverHasKey ? "none" : "";
+  updateApiKeyStatus();
+};
+
 apiKeyEl.value = loadApiKey();
 updateApiKeyStatus();
 apiKeyEl.addEventListener("blur", () => {
@@ -241,6 +257,12 @@ apiKeyEl.addEventListener("blur", () => {
   updateApiKeyStatus();
 });
 apiKeyEl.addEventListener("input", updateApiKeyStatus);
+
+// Probe the Worker for a server-side key. If present, hide the input.
+fetch("/config")
+  .then((r) => (r.ok ? r.json() : null))
+  .then((cfg) => setServerHasKey(cfg && cfg.hasServerKey))
+  .catch(() => {});
 
 let speed = 1.0;
 speedEl.addEventListener("input", () => {
@@ -543,6 +565,27 @@ const appendTokenToResponse = (tok) => {
 
   // Auto-scroll if needed.
   responseEl.scrollTop = responseEl.scrollHeight;
+
+  // Let the GIF recorder snapshot a frame after each token.
+  document.dispatchEvent(new CustomEvent("response-token-appended", { detail: { token: tok } }));
+};
+
+// Explicit end-of-sequence marker. Drops the blinking caret (generation is
+// over) and appends a styled <|endoftext|> token so the animation has a
+// visible terminator — useful both on screen and for the saved recording.
+const END_OF_TEXT = "<|endoftext|>";
+const appendEndToken = () => {
+  if (responseEl.querySelector(".tok.end-token")) return;
+  const caret = responseEl.querySelector(".caret");
+  if (caret) caret.remove();
+  const span = document.createElement("span");
+  span.className = "tok end-token just-added";
+  span.textContent = END_OF_TEXT;
+  responseEl.appendChild(span);
+  setTimeout(() => span.classList.remove("just-added"), 700);
+  responseEl.scrollTop = responseEl.scrollHeight;
+  // Notify the recorder so it can stop after one more frame.
+  document.dispatchEvent(new CustomEvent("response-end-token"));
 };
 
 // ────────── Per-token perplexity plot ──────────
@@ -1045,13 +1088,15 @@ const generate = async () => {
   if (!message) return;
 
   const apiKey = apiKeyEl.value.trim();
-  if (!apiKey) {
-    setStatus("Paste an OpenAI API key to generate.", true);
-    apiKeyEl.focus();
-    return;
+  if (!serverHasKey) {
+    if (!apiKey) {
+      setStatus("Paste an OpenAI API key to generate.", true);
+      apiKeyEl.focus();
+      return;
+    }
+    saveApiKey(apiKey);
+    updateApiKeyStatus();
   }
-  saveApiKey(apiKey);
-  updateApiKeyStatus();
 
   reset();
   setBusy(true);
@@ -1063,7 +1108,8 @@ const generate = async () => {
 
   try {
     const maxTokens = Math.max(1, parseInt(maxTokensEl.value, 10) || 1000);
-    const requestBody = { message, maxTokens, model, apiKey };
+    const requestBody = { message, maxTokens, model };
+    if (!serverHasKey) requestBody.apiKey = apiKey;
     if (scenario) {
       requestBody.system = scenario.system;
       requestBody.history = scenario.history;
@@ -1075,6 +1121,7 @@ const generate = async () => {
     });
     const data = await res.json();
     if (!res.ok) {
+      if (data && data.needsClientKey) setServerHasKey(false);
       setStatus(data.error ?? `HTTP ${res.status}`, true);
       // Drop the empty run so the legend isn't littered with failed attempts.
       const idx = runs.indexOf(currentRun);
@@ -1097,6 +1144,7 @@ const generate = async () => {
     for (let i = 0; i < tokens.length; i++) {
       await animateToken(tokens[i], i, tokens.length);
     }
+    appendEndToken();
     setStatus(`Done. Sampled ${tokens.length} tokens with model ${data.model}.`);
     finishCurrentRun();
   } catch (err) {
@@ -1210,5 +1258,364 @@ recordButtons.perp.addEventListener("click", () =>
 recordButtons.dist.addEventListener("click", () =>
   startRecording(recordButtons.dist, recordButtons.perp, "token-distribution"),
 );
+
+// ────────── GIF recorder (prompt + response continuation) ──────────
+// Renders the prompt and the response onto a 2D canvas with our own text
+// layout (no DOM rasterization — that gave blurry, unstyled output) and
+// encodes a real .gif via the vendored `gifenc` library. One frame per
+// appended token + a held end frame after <|endoftext|>.
+//
+// Toggling "Include prompt" off skips the prompt zone — useful when you
+// only want the response itself in the GIF.
+const recordResponseBtn = $("#record-response");
+const includePromptEl = $("#include-prompt");
+
+const INCLUDE_PROMPT_STORAGE = "demoLogits.includePrompt";
+try {
+  const saved = localStorage.getItem(INCLUDE_PROMPT_STORAGE);
+  if (saved !== null) includePromptEl.checked = saved === "1";
+} catch {}
+includePromptEl.addEventListener("change", () => {
+  try {
+    localStorage.setItem(INCLUDE_PROMPT_STORAGE, includePromptEl.checked ? "1" : "0");
+  } catch {}
+});
+
+// Canvas geometry — fixed width, height grows in line increments.
+const GIF_WIDTH = 720;
+const GIF_PADDING = 24;
+const GIF_LINE_HEIGHT = 28; // 16px font * 1.7-ish
+const GIF_FONT = '16px ui-monospace, Menlo, Consolas, "Liberation Mono", monospace';
+const GIF_SMALL_FONT = '12px ui-monospace, Menlo, Consolas, "Liberation Mono", monospace';
+const GIF_FRAME_DELAY_MS = 140;
+const GIF_END_HOLD_MS = 1000;
+
+const readCssVar = (name, fallback) => {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+};
+
+// Resolve a CSS variable to a concrete CSS color string the canvas accepts.
+// rgba() with CSS-variable values doesn't render on canvas, so we fall back
+// to hardcoded ones that match the dark theme.
+const gifColors = () => ({
+  bg: readCssVar("--bg", "#0f1115"),
+  panel: readCssVar("--panel", "#181b22"),
+  border: readCssVar("--border", "#262a33"),
+  text: readCssVar("--text", "#e6e8ee"),
+  muted: readCssVar("--muted", "#8a93a6"),
+  accent: readCssVar("--accent", "#ffd166"),
+  highlight: "rgba(255, 209, 102, 0.22)",
+});
+
+// Word-wrap helper: returns an array of lines for the given text, breaking
+// only at whitespace where possible but force-breaking very long words.
+const wrapText = (ctx, text, maxWidth) => {
+  const out = [];
+  for (const paragraph of text.split("\n")) {
+    if (paragraph.length === 0) { out.push(""); continue; }
+    let line = "";
+    const words = paragraph.split(/(\s+)/); // keep separators
+    for (const w of words) {
+      const candidate = line + w;
+      if (ctx.measureText(candidate).width <= maxWidth) {
+        line = candidate;
+      } else if (line.length > 0) {
+        out.push(line.replace(/\s+$/, ""));
+        line = w.replace(/^\s+/, "");
+      } else {
+        // Single token wider than the line — hard-break character-by-character.
+        let buf = "";
+        for (const ch of w) {
+          if (ctx.measureText(buf + ch).width > maxWidth && buf.length > 0) {
+            out.push(buf);
+            buf = ch;
+          } else {
+            buf += ch;
+          }
+        }
+        line = buf;
+      }
+    }
+    out.push(line);
+  }
+  return out;
+};
+
+// Lays out prompt + response into lines, given current state.
+const layoutGifFrame = (ctx, state) => {
+  const { promptText, responseTokens, includePrompt, endTokenShown } = state;
+  const innerW = GIF_WIDTH - GIF_PADDING * 2;
+  const blocks = [];
+
+  if (includePrompt && promptText) {
+    ctx.font = GIF_SMALL_FONT;
+    blocks.push({ kind: "label", text: "Prompt" });
+    ctx.font = GIF_FONT;
+    for (const line of wrapText(ctx, promptText, innerW)) {
+      blocks.push({ kind: "prompt", text: line });
+    }
+    blocks.push({ kind: "divider" });
+    blocks.push({ kind: "label", text: "Response" });
+  }
+
+  // Response: concatenate all tokens (preserving whitespace), wrap to width.
+  // We want to keep track of which line/range contains the *last* token so
+  // we can highlight it. Build the full text first, remember the offset of
+  // each token, then map offsets to wrapped (line, x-range).
+  const fullText = responseTokens.join("");
+  ctx.font = GIF_FONT;
+  const lines = wrapText(ctx, fullText || " ", innerW);
+  for (const line of lines) {
+    blocks.push({ kind: "response", text: line });
+  }
+  if (endTokenShown) {
+    blocks.push({ kind: "end-token", text: "<|endoftext|>" });
+  }
+  return blocks;
+};
+
+const measureCanvasHeight = (blocks) => {
+  let h = GIF_PADDING;
+  for (const b of blocks) {
+    if (b.kind === "label") h += 18;
+    else if (b.kind === "divider") h += 16;
+    else h += GIF_LINE_HEIGHT;
+  }
+  h += GIF_PADDING;
+  return Math.max(120, h);
+};
+
+const drawGifFrame = (canvas, ctx, state, forcedHeight) => {
+  const colors = gifColors();
+  const blocks = layoutGifFrame(ctx, state);
+  const newHeight = forcedHeight ?? measureCanvasHeight(blocks);
+  if (canvas.height !== newHeight) canvas.height = newHeight;
+  // Background.
+  ctx.fillStyle = colors.bg;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // Panel.
+  ctx.fillStyle = colors.panel;
+  const r = 12;
+  const px = GIF_PADDING / 2;
+  const py = GIF_PADDING / 2;
+  const pw = canvas.width - GIF_PADDING;
+  const ph = canvas.height - GIF_PADDING;
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath(); ctx.roundRect(px, py, pw, ph, r); ctx.fill();
+  } else {
+    ctx.fillRect(px, py, pw, ph);
+  }
+  // Border.
+  ctx.strokeStyle = colors.border;
+  ctx.lineWidth = 1;
+  if (typeof ctx.roundRect === "function") {
+    ctx.beginPath(); ctx.roundRect(px + 0.5, py + 0.5, pw - 1, ph - 1, r); ctx.stroke();
+  } else {
+    ctx.strokeRect(px + 0.5, py + 0.5, pw - 1, ph - 1);
+  }
+
+  let y = GIF_PADDING;
+  ctx.textBaseline = "top";
+  for (const b of blocks) {
+    if (b.kind === "label") {
+      ctx.font = GIF_SMALL_FONT;
+      ctx.fillStyle = colors.muted;
+      ctx.fillText(b.text.toUpperCase(), GIF_PADDING, y);
+      y += 18;
+    } else if (b.kind === "divider") {
+      ctx.strokeStyle = colors.border;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(GIF_PADDING, y + 6);
+      ctx.lineTo(canvas.width - GIF_PADDING, y + 6);
+      ctx.stroke();
+      y += 16;
+    } else if (b.kind === "prompt") {
+      ctx.font = GIF_FONT;
+      ctx.fillStyle = colors.text;
+      ctx.fillText(b.text, GIF_PADDING, y);
+      y += GIF_LINE_HEIGHT;
+    } else if (b.kind === "response") {
+      ctx.font = GIF_FONT;
+      ctx.fillStyle = colors.text;
+      ctx.fillText(b.text, GIF_PADDING, y);
+      y += GIF_LINE_HEIGHT;
+    } else if (b.kind === "end-token") {
+      ctx.font = GIF_FONT;
+      const tw = ctx.measureText(b.text).width;
+      const bx = GIF_PADDING;
+      const by = y + 2;
+      const bw = tw + 12;
+      const bh = GIF_LINE_HEIGHT - 4;
+      // Dashed border.
+      ctx.save();
+      ctx.strokeStyle = colors.muted;
+      ctx.setLineDash([4, 3]);
+      ctx.lineWidth = 1;
+      ctx.strokeRect(bx + 0.5, by + 0.5, bw - 1, bh - 1);
+      ctx.restore();
+      ctx.fillStyle = colors.muted;
+      ctx.fillText(b.text, bx + 6, y + 4);
+      y += GIF_LINE_HEIGHT;
+    }
+  }
+
+  // Blinking caret if generation isn't finished.
+  if (!state.endTokenShown && state.responseTokens.length > 0) {
+    ctx.font = GIF_FONT;
+    const lastLine = blocks.filter((b) => b.kind === "response").slice(-1)[0];
+    if (lastLine) {
+      const lineY = y - GIF_LINE_HEIGHT;
+      const lineWidth = ctx.measureText(lastLine.text).width;
+      ctx.fillStyle = colors.accent;
+      ctx.fillText("▌", GIF_PADDING + lineWidth, lineY);
+    }
+  }
+};
+
+// `gifenc` writes the logical-screen size from the first frame and clips
+// every subsequent frame to it. So we can't stream tokens directly — we
+// buffer per-token snapshots (just counts + flags, not pixels) and do the
+// actual encoding in one pass on finalize, at the *final* max canvas
+// height. That way every frame fits the last frame's layout.
+let gifRecording = null;
+
+const stopGifRecording = (canceled = false) => {
+  if (!gifRecording) return;
+  if (canceled) {
+    recordResponseBtn.textContent = gifRecording.originalLabel;
+    recordResponseBtn.classList.remove("recording");
+    setStatus("GIF recording canceled.");
+    gifRecording = null;
+    return;
+  }
+  gifRecording.finalize();
+};
+
+const startGifRecording = async () => {
+  if (gifRecording) {
+    stopGifRecording(true);
+    return;
+  }
+  const gifenc = window.__gifenc;
+  if (!gifenc || !gifenc.GIFEncoder) {
+    setStatus("GIF encoder not loaded yet — try again in a moment.", true);
+    return;
+  }
+
+  const state = {
+    promptText: messageEl.value.trim(),
+    responseTokens: [],
+    includePrompt: includePromptEl.checked,
+    endTokenShown: false,
+  };
+  // Each entry is `{ count, endTokenShown, delay }` — a cheap snapshot of
+  // the response state at the moment the event fired.
+  const snapshots = [];
+
+  const pushSnapshot = (delayMs) => {
+    snapshots.push({
+      count: state.responseTokens.length,
+      endTokenShown: state.endTokenShown,
+      delay: delayMs,
+    });
+  };
+
+  // Initial frame so the GIF starts with the prompt visible.
+  pushSnapshot(GIF_FRAME_DELAY_MS);
+
+  const finalize = async () => {
+    if (!gifRecording) return;
+    setStatus("Encoding GIF…");
+    // Yield once so the status update paints before the heavy work.
+    await new Promise((r) => requestAnimationFrame(() => r()));
+
+    // Pre-size the canvas to the final layout's height so every frame
+    // shares the same logical-screen size.
+    const canvas = document.createElement("canvas");
+    canvas.width = GIF_WIDTH;
+    const tmpCtx = canvas.getContext("2d");
+    drawGifFrame(canvas, tmpCtx, state); // sets canvas.height to final height
+    const finalHeight = canvas.height;
+
+    const encoder = gifenc.GIFEncoder();
+    const renderState = {
+      promptText: state.promptText,
+      responseTokens: state.responseTokens,
+      includePrompt: state.includePrompt,
+      endTokenShown: false,
+      _visibleCount: 0,
+    };
+
+    // Append a 1-second hold of the last frame so the GIF doesn't loop back
+    // the instant it lands on <|endoftext|>.
+    if (snapshots.length > 0) {
+      const last = snapshots[snapshots.length - 1];
+      snapshots.push({ count: last.count, endTokenShown: last.endTokenShown, delay: GIF_END_HOLD_MS });
+    }
+
+    for (let i = 0; i < snapshots.length; i++) {
+      const snap = snapshots[i];
+      // Slice the response to only the tokens that had been emitted at
+      // this snapshot — same final height applies to every frame.
+      renderState.responseTokens = state.responseTokens.slice(0, snap.count);
+      renderState.endTokenShown = snap.endTokenShown;
+      drawGifFrame(canvas, tmpCtx, renderState, finalHeight);
+      const { data, width, height } = tmpCtx.getImageData(0, 0, canvas.width, canvas.height);
+      const palette = gifenc.quantize(data, 64);
+      const indexed = gifenc.applyPalette(data, palette);
+      encoder.writeFrame(indexed, width, height, { palette, delay: snap.delay });
+      // Yield every 10 frames so the UI thread stays responsive on long runs.
+      if ((i + 1) % 10 === 0) {
+        setStatus(`Encoding GIF… ${i + 1}/${snapshots.length}`);
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+
+    encoder.finish();
+    const blob = new Blob([encoder.bytes()], { type: "image/gif" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const ts = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+    a.href = url;
+    a.download = `response-${ts}.gif`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    recordResponseBtn.textContent = gifRecording.originalLabel;
+    recordResponseBtn.classList.remove("recording");
+    setStatus(`Saved ${a.download} (${(blob.size / 1024).toFixed(0)} KB, ${snapshots.length} frames).`);
+    gifRecording = null;
+  };
+
+  gifRecording = {
+    state,
+    snapshots,
+    pushSnapshot,
+    finalize,
+    originalLabel: recordResponseBtn.textContent,
+  };
+  recordResponseBtn.textContent = "■ Stop";
+  recordResponseBtn.classList.add("recording");
+  setStatus("Recording GIF… auto-stops after <|endoftext|>.");
+};
+
+document.addEventListener("response-token-appended", (e) => {
+  if (!gifRecording) return;
+  const tok = e.detail && typeof e.detail.token === "string" ? e.detail.token : "";
+  gifRecording.state.responseTokens.push(tok);
+  gifRecording.pushSnapshot(GIF_FRAME_DELAY_MS);
+});
+
+document.addEventListener("response-end-token", () => {
+  if (!gifRecording) return;
+  gifRecording.state.endTokenShown = true;
+  gifRecording.pushSnapshot(GIF_FRAME_DELAY_MS);
+  gifRecording.finalize();
+});
+
+recordResponseBtn.addEventListener("click", startGifRecording);
 
 reset();

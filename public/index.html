@@ -105,7 +105,16 @@
 
     <section class="output">
       <div class="response-block">
-        <h2>Response</h2>
+        <h2>
+          <span>Response</span>
+          <span class="response-actions">
+            <label class="include-prompt-toggle" title="When on, the recorded GIF shows the prompt above the response (response reads as a continuation of the prompt).">
+              <input id="include-prompt" type="checkbox" checked />
+              Include prompt
+            </label>
+            <button id="record-response" type="button" class="record-btn" title="Record the prompt + response animation as a GIF. Drawn on a canvas (no screen capture). Auto-stops after &lt;|endoftext|&gt;.">● Record GIF</button>
+          </span>
+        </h2>
         <div id="response" class="response"><span class="caret">▌</span></div>
       </div>
 
@@ -144,6 +153,11 @@
       <div id="runs-legend" class="runs-legend"></div>
     </section>
 
+    <script type="module">
+      import { GIFEncoder, quantize, applyPalette } from "/vendor/gifenc.esm.js";
+      window.__gifenc = { GIFEncoder, quantize, applyPalette };
+      window.dispatchEvent(new Event("gifenc-ready"));
+    </script>
     <script src="/app.js"></script>
   </body>
 </html>
