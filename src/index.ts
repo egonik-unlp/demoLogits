@@ -1,6 +1,8 @@
 const DEFAULT_MODEL = "gpt-4.1-mini";
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
 
+const isGen5Model = (model: string) => model.startsWith("gpt-5");
+
 type TopToken = { token: string; prob: number };
 type TokenWithLogits = { token: string; prob: number; top: TopToken[] };
 
@@ -122,6 +124,8 @@ const handleGenerate = async (req: Request, env: Env): Promise<Response> => {
         logprobs: true,
         top_logprobs: 10,
         max_tokens: maxTokens,
+        // Gen 5 models reason by default; reasoning suppresses logprobs. Disable it.
+        ...(isGen5Model(model) ? { reasoning: "none" } : {}),
       }),
     });
   } catch (err) {

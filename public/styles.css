@@ -77,7 +77,7 @@ button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-button#pause, button#step {
+button#pause, button#step, button#fast-forward {
   background: var(--panel-2);
   color: var(--text);
   border: 1px solid var(--border);
@@ -90,16 +90,38 @@ button#pause, button#step {
   flex-wrap: wrap;
 }
 
-.presets {
+.examples {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.examples-tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.ex-tab {
+  background: transparent;
+  color: var(--muted);
+  border: 0;
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 120ms, border-color 120ms;
+}
+.ex-tab:hover { color: var(--text); }
+.ex-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.examples-chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-}
-.presets-label {
-  color: var(--muted);
-  font-size: 13px;
-  margin-right: 4px;
+  gap: 6px;
+  padding-top: 4px;
 }
 .preset-chip {
   background: var(--panel-2);
@@ -131,6 +153,10 @@ button#pause, button#step {
 }
 .preset-chip.high .chip-tag { color: var(--accent-2); }
 .preset-chip.low  .chip-tag { color: var(--accent); }
+.preset-chip.puzzle {
+  border-color: rgba(255, 209, 102, 0.35);
+}
+.preset-chip.puzzle .chip-tag { color: var(--accent-2); }
 
 .preset-chip.chatbot {
   display: inline-flex;
@@ -726,3 +752,101 @@ button#pause, button#step {
 }
 .runs-legend .run-delete:hover { color: #ff8b8b; background: rgba(255, 139, 139, 0.08); }
 .runs-legend .legend-item.active { outline: 1px solid var(--accent-2); }
+
+.metrics h2 .metrics-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+.plot-metric-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--muted);
+}
+.plot-metric-toggle select {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.plot-metric-toggle select:hover { border-color: var(--accent); }
+
+.perplexity-plot .threshold {
+  stroke: #ff5b5b;
+  stroke-width: 1.2;
+  stroke-dasharray: 4 4;
+  opacity: 0.7;
+}
+.perplexity-plot .threshold-label {
+  fill: #ff8b8b;
+  font-size: 10px;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+}
+
+.metrics-table {
+  margin-top: 14px;
+  font-family: ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.metrics-table-empty {
+  color: var(--muted);
+  font-style: italic;
+  padding: 8px 0;
+}
+.metrics-table-grid {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.metrics-table-grid th,
+.metrics-table-grid td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+}
+.metrics-table-grid tbody tr:last-child td { border-bottom: 0; }
+.metrics-table-grid th {
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  background: var(--panel-2);
+}
+.metrics-table-grid th:first-child,
+.metrics-table-grid td.mt-run,
+.metrics-table-grid td.mt-model { text-align: left; }
+.metrics-table-grid td.mt-run {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+}
+.metrics-table-grid td.mt-run .swatch {
+  width: 10px; height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+}
+.metrics-table-grid td.mt-model { color: var(--text); font-weight: 600; }
+.metrics-table-grid td.mt-num { color: var(--text); font-variant-numeric: tabular-nums; }
+.metrics-table-grid td.mt-num.best {
+  color: #6ee7a0;
+  background: rgba(110, 231, 160, 0.08);
+}
+.metrics-table-grid td.mt-num.worst {
+  color: #ff8b8b;
+  background: rgba(255, 139, 139, 0.08);
+}

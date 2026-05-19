@@ -26,14 +26,13 @@
         <button id="generate">Generate</button>
       </div>
 
-      <div class="presets" id="presets">
-        <span class="presets-label">Try:</span>
-        <!-- Buttons populated from JS so we keep prompt text in one place. -->
-      </div>
-
-      <div class="presets" id="chatbot-presets">
-        <span class="presets-label">Chatbot:</span>
-        <!-- Chatbot scenario chips populated from JS. -->
+      <div class="examples">
+        <div class="examples-tabs" role="tablist">
+          <button type="button" class="ex-tab active" data-cat="prompts" role="tab">Prompts</button>
+          <button type="button" class="ex-tab" data-cat="chatbot" role="tab">Chatbot</button>
+          <button type="button" class="ex-tab" data-cat="puzzles" role="tab">Puzzles</button>
+        </div>
+        <div id="examples-chips" class="examples-chips" role="tabpanel"></div>
       </div>
 
       <details id="scenario-context" class="scenario-context" hidden>
@@ -49,7 +48,7 @@
       <div class="play-row">
         <label class="speed">
           Speed
-          <input id="speed" type="range" min="0.3" max="3" step="0.1" value="1" />
+          <input id="speed" type="range" min="0.3" max="10" step="0.1" value="1" />
           <span id="speed-val">1.0x</span>
         </label>
         <label class="speed">
@@ -99,6 +98,7 @@
         </label>
         <button id="pause" disabled>Pause</button>
         <button id="step" disabled>Step</button>
+        <button id="fast-forward" disabled title="Skip the animation; finish remaining tokens instantly.">⏭ Skip anim</button>
         <span id="status" class="status"></span>
       </div>
     </section>
@@ -140,7 +140,17 @@
     <section class="metrics">
       <h2>
         <span>Per-token perplexity <span class="metrics-hint">log scale &middot; high spike = the model was unsure</span></span>
-        <button id="record-perp" type="button" class="record-btn" title="Record an animation of this plot as a .webm video. Pick this tab/window in the picker dialog.">● Record</button>
+        <span class="metrics-controls">
+          <label class="plot-metric-toggle" title="Re-cast the plot to surface localized spikes that the raw curve dilutes in long sequences.">
+            View:
+            <select id="plot-metric">
+              <option value="raw" selected>raw per-token</option>
+              <option value="rolling-max">rolling max (w=10)</option>
+              <option value="threshold">spike highlight (&gt;10)</option>
+            </select>
+          </label>
+          <button id="record-perp" type="button" class="record-btn" title="Record an animation of this plot as a .webm video. Pick this tab/window in the picker dialog.">● Record</button>
+        </span>
       </h2>
       <div id="perplexity-plot" class="perplexity-plot"></div>
       <div class="metrics-meta">
@@ -150,6 +160,7 @@
         </label>
         <button id="clear-runs" type="button" class="clear-runs">Clear runs</button>
       </div>
+      <div id="metrics-table" class="metrics-table"></div>
       <div id="runs-legend" class="runs-legend"></div>
     </section>
 

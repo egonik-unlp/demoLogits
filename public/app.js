@@ -185,12 +185,85 @@ const CHATBOT_SCENARIOS = [
   },
 ];
 
+// ────────── Logic puzzles ──────────
+// Hard constraint-satisfaction prompts. The model can't brute-force these
+// during token-by-token sampling, so perplexity tends to spike sharply on the
+// "decision" tokens — which makes them a good showcase for the metrics view.
+
+const PUZZLE_EN = `Six people — Ava, Ben, Cara, Dylan, Emma, and Felix — each brought exactly one item to a community event: a book, a lantern, a camera, a puzzle, a blanket, or a guitar.
+
+Each person arrived from exactly one neighborhood: Northside, Riverside, Old Town, Hillcrest, Lakeside, or Market Square.
+
+They arrived one at a time, in positions 1 through 6.
+
+Facts:
+
+1. The person with the lantern arrived immediately before the person from Riverside.
+2. Ava did not arrive first or last.
+3. The person from Hillcrest arrived sometime after Cara.
+4. Ben did not bring the camera and is not from Lakeside.
+5. The person with the puzzle arrived third.
+6. Dylan arrived immediately after the person from Old Town.
+7. Emma is either the person with the blanket or the person from Northside, but not both.
+8. The person with the guitar arrived before the person from Lakeside.
+9. Cara is not from Riverside, and she did not arrive immediately before Emma.
+10. The person from Northside arrived two positions before the person with the camera.
+11. Ava arrived sometime after the person with the blanket.
+12. The person from Lakeside did not bring the puzzle.
+13. Dylan is not from Hillcrest.
+14. The person with the camera arrived after Ben but before Emma.
+15. The person from Old Town did not bring the blanket.
+16. Felix arrived earlier than the person with the book, but later than the person from Market Square.
+
+Question:
+
+Determine each person's item, neighborhood, and arrival order.
+
+Important: Do not guess. Solve the puzzle step by step. If the facts are inconsistent, identify the contradiction. If multiple solutions exist, list all possible solutions.`;
+
+const PUZZLE_ES = `Seis personas — Ava, Ben, Cara, Dylan, Emma y Felix — llevaron exactamente un objeto cada una a un evento comunitario: un libro, una linterna, una cámara, un rompecabezas, una manta o una guitarra.
+
+Cada persona llegó desde exactamente un barrio: Northside, Riverside, Old Town, Hillcrest, Lakeside o Market Square.
+
+Llegaron una a la vez, en las posiciones 1 a 6.
+
+Pistas:
+
+1. La persona con la linterna llegó inmediatamente antes que la persona de Riverside.
+2. Ava no llegó ni primero ni último.
+3. La persona de Hillcrest llegó en algún momento después de Cara.
+4. Ben no llevó la cámara y no es de Lakeside.
+5. La persona con el rompecabezas llegó en tercer lugar.
+6. Dylan llegó inmediatamente después de la persona de Old Town.
+7. Emma es o bien la persona con la manta o bien la persona de Northside, pero no ambas.
+8. La persona con la guitarra llegó antes que la persona de Lakeside.
+9. Cara no es de Riverside, y no llegó inmediatamente antes que Emma.
+10. La persona de Northside llegó dos posiciones antes que la persona con la cámara.
+11. Ava llegó en algún momento después de la persona con la manta.
+12. La persona de Lakeside no llevó el rompecabezas.
+13. Dylan no es de Hillcrest.
+14. La persona con la cámara llegó después que Ben pero antes que Emma.
+15. La persona de Old Town no llevó la manta.
+16. Felix llegó antes que la persona con el libro, pero después que la persona de Market Square.
+
+Pregunta:
+
+Determina el objeto, el barrio y el orden de llegada de cada persona.
+
+Importante: No adivines. Resuelve el rompecabezas paso a paso. Si los datos son inconsistentes, identifica la contradicción. Si existen múltiples soluciones, enuméralas todas.`;
+
+const PUZZLES = [
+  { id: "six-people-en", lang: "EN", label: "Six-person event (EN)", prompt: PUZZLE_EN },
+  { id: "six-people-es", lang: "ES", label: "Six-person event (ES)", prompt: PUZZLE_ES },
+];
+
 
 const $ = (sel) => document.querySelector(sel);
 const messageEl = $("#message");
 const generateBtn = $("#generate");
 const pauseBtn = $("#pause");
 const stepBtn = $("#step");
+const fastForwardBtn = $("#fast-forward");
 const speedEl = $("#speed");
 const speedValEl = $("#speed-val");
 const rollLengthEl = $("#roll-length");
@@ -199,8 +272,8 @@ const tempValEl = $("#temperature-val");
 const stripEl = $("#strip");
 const stripMarkerEl = $("#strip-marker");
 const entropyTextEl = $("#entropy-text");
-const presetsEl = $("#presets");
-const chatbotPresetsEl = $("#chatbot-presets");
+const examplesChipsEl = $("#examples-chips");
+const examplesTabsEl = document.querySelector(".examples-tabs");
 const scenarioContextEl = $("#scenario-context");
 const ctxSummaryMetaEl = $("#ctx-summary-meta");
 const ctxSystemEl = $("#ctx-system");
@@ -212,6 +285,8 @@ const modelEl = $("#model");
 const compareModeEl = $("#compare-mode");
 const clearRunsBtn = $("#clear-runs");
 const runsLegendEl = $("#runs-legend");
+const metricsTableEl = $("#metrics-table");
+const plotMetricEl = $("#plot-metric");
 const statusEl = $("#status");
 const responseEl = $("#response");
 const distEl = $("#dist");
@@ -311,6 +386,7 @@ tempEl.addEventListener("input", () => {
 
 let paused = false;
 let stepOnce = false;
+let fastForward = false;
 pauseBtn.addEventListener("click", () => {
   paused = !paused;
   pauseBtn.textContent = paused ? "Resume" : "Pause";
@@ -319,17 +395,32 @@ pauseBtn.addEventListener("click", () => {
 stepBtn.addEventListener("click", () => {
   if (paused) stepOnce = true;
 });
+fastForwardBtn.addEventListener("click", () => {
+  // One-way switch for the current run. Auto-unpause so the loop progresses.
+  fastForward = true;
+  paused = false;
+  pauseBtn.textContent = "Pause";
+  pauseBtn.disabled = true;
+  stepBtn.disabled = true;
+  fastForwardBtn.disabled = true;
+  fastForwardBtn.textContent = "⏭ Skipping…";
+});
 
 const setStatus = (msg, isErr = false) => {
   statusEl.textContent = msg;
   statusEl.classList.toggle("error", isErr);
 };
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms / speed));
+const sleep = (ms) => {
+  // In fast-forward we still yield to the browser so the response text and
+  // plot can paint; just don't actually wait.
+  if (fastForward) return new Promise((r) => setTimeout(r, 0));
+  return new Promise((r) => setTimeout(r, ms / speed));
+};
 
 // Pause if requested. While paused, wait until resumed OR a single step is requested.
 const waitIfPaused = async () => {
-  while (paused) {
+  while (paused && !fastForward) {
     if (stepOnce) {
       stepOnce = false;
       return;
@@ -617,10 +708,59 @@ const svg = (tag, attrs = {}) => {
   return el;
 };
 
-const computeSeqPerp = (series) => {
-  if (series.length === 0) return null;
-  const sumNegLog = series.reduce((a, p) => a + Math.log(p.perp), 0);
-  return Math.exp(sumNegLog / series.length);
+// Threshold for "spike" tokens: perp > 10 ≡ the model gave its own pick <10% prob.
+const SPIKE_THRESHOLD = 10;
+
+// Linear-interpolated percentile on a pre-sorted ascending array.
+const percentile = (sorted, q) => {
+  if (sorted.length === 0) return null;
+  if (sorted.length === 1) return sorted[0];
+  const pos = (sorted.length - 1) * q;
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+};
+
+const computeRunMetrics = (series) => {
+  if (series.length === 0) {
+    return {
+      count: 0,
+      geoMean: null, arithMean: null, max: null,
+      p95: null, p99: null,
+      spikeCount: 0, spikeDensity: 0,
+    };
+  }
+  const perps = series.map((p) => p.perp);
+  const sorted = [...perps].sort((a, b) => a - b);
+  const sumNegLog = perps.reduce((a, v) => a + Math.log(v), 0);
+  const sum = perps.reduce((a, v) => a + v, 0);
+  let spikeCount = 0;
+  for (const v of perps) if (v > SPIKE_THRESHOLD) spikeCount++;
+  return {
+    count: series.length,
+    geoMean: Math.exp(sumNegLog / series.length),
+    arithMean: sum / series.length,
+    max: sorted[sorted.length - 1],
+    p95: percentile(sorted, 0.95),
+    p99: percentile(sorted, 0.99),
+    spikeCount,
+    spikeDensity: (spikeCount / series.length) * 100,
+  };
+};
+
+// Trailing-window max over a numeric array. Window of N at index i covers
+// indices [max(0, i-N+1), i]. Surfaces the local worst case so a single spike
+// inside a long, mostly-calm sequence stays visible.
+const rollingMax = (values, window) => {
+  const out = new Array(values.length);
+  for (let i = 0; i < values.length; i++) {
+    const start = Math.max(0, i - window + 1);
+    let m = values[start];
+    for (let j = start + 1; j <= i; j++) if (values[j] > m) m = values[j];
+    out[i] = m;
+  }
+  return out;
 };
 
 const drawPerplexityPlot = () => {
@@ -637,6 +777,25 @@ const drawPerplexityPlot = () => {
     return;
   }
 
+  const mode = (plotMetricEl && plotMetricEl.value) || "raw";
+
+  // Per-run plotted values. The token + raw perp are kept around for tooltips
+  // even when the line is drawn from a derived series (e.g. rolling-max).
+  const plotted = visibleRuns.map((r) => {
+    const rawPerps = r.series.map((p) => p.perp);
+    const yPerps = mode === "rolling-max" ? rollingMax(rawPerps, 10) : rawPerps;
+    return {
+      run: r,
+      points: r.series.map((p, i) => ({
+        idx: i,
+        token: p.token,
+        rawPerp: p.perp,
+        yPerp: yPerps[i],
+        isSpike: p.perp > SPIKE_THRESHOLD,
+      })),
+    };
+  });
+
   const W = perplexityPlotEl.clientWidth || 800;
   const H = 200;
   const M = { top: 12, right: 16, bottom: 28, left: 44 };
@@ -647,7 +806,7 @@ const drawPerplexityPlot = () => {
 
   // Y range — log scale clipped to [1, max(20, dataMax)].
   let dataMax = 1;
-  for (const r of visibleRuns) for (const p of r.series) if (p.perp > dataMax) dataMax = p.perp;
+  for (const pl of plotted) for (const p of pl.points) if (p.yPerp > dataMax) dataMax = p.yPerp;
   const yMax = Math.max(20, Math.pow(10, Math.ceil(Math.log10(dataMax))));
   const yMin = 1;
 
@@ -695,23 +854,38 @@ const drawPerplexityPlot = () => {
   root.appendChild(grid);
   root.appendChild(axis);
 
+  // In threshold mode, draw a dashed reference line at the spike cutoff so the
+  // viewer can see which dots cross it at a glance.
+  if (mode === "threshold" && SPIKE_THRESHOLD <= yMax) {
+    const yT = yScale(SPIKE_THRESHOLD);
+    const thr = svg("line", {
+      class: "threshold",
+      x1: M.left, x2: M.left + innerW, y1: yT, y2: yT,
+    });
+    root.appendChild(thr);
+    const thrLbl = svg("text", {
+      class: "threshold-label",
+      x: M.left + innerW - 4, y: yT - 4, "text-anchor": "end",
+    });
+    thrLbl.textContent = `spike > ${SPIKE_THRESHOLD}`;
+    root.appendChild(thrLbl);
+  }
+
   // For a single run, draw the filled area underneath; for multiple runs
   // overlapping fills look muddy, so we only show lines + dots.
-  const fillArea = visibleRuns.length === 1;
+  const fillArea = plotted.length === 1;
 
-  for (const run of visibleRuns) {
-    if (run.series.length === 0) continue;
+  for (const { run, points } of plotted) {
+    if (points.length === 0) continue;
 
-    const pts = run.series.map((p, i) => `${xScale(i)},${yScale(p.perp)}`);
+    const pts = points.map((p) => `${xScale(p.idx)},${yScale(p.yPerp)}`);
 
     if (fillArea && pts.length >= 2) {
       const areaD =
         `M${xScale(0)},${M.top + innerH} ` +
         `L${pts.join(" L")} ` +
-        `L${xScale(run.series.length - 1)},${M.top + innerH} Z`;
+        `L${xScale(points.length - 1)},${M.top + innerH} Z`;
       const area = svg("path", { class: "area", d: areaD });
-      // Inline style overrides the CSS class default — needed so per-run
-      // colors actually win over the .area rule.
       area.style.fill = run.color;
       area.style.fillOpacity = "0.12";
       root.appendChild(area);
@@ -723,23 +897,144 @@ const drawPerplexityPlot = () => {
       root.appendChild(line);
     }
 
-    run.series.forEach((p, i) => {
-      const isLast = run.active && i === run.series.length - 1;
+    points.forEach((p) => {
+      const isLast = run.active && p.idx === points.length - 1;
+      const highlightSpike = mode === "threshold" && p.isSpike;
+      const r = isLast ? 5 : highlightSpike ? 4.5 : 3;
       const dot = svg("circle", {
-        class: "dot" + (isLast ? " last" : ""),
-        cx: xScale(i),
-        cy: yScale(p.perp),
-        r: isLast ? 5 : 3,
+        class: "dot" + (isLast ? " last" : "") + (highlightSpike ? " spike" : ""),
+        cx: xScale(p.idx),
+        cy: yScale(p.yPerp),
+        r,
       });
       dot.style.fill = isLast ? "var(--accent-2)" : run.color;
+      if (highlightSpike) {
+        dot.style.stroke = "#ff5b5b";
+        dot.style.strokeWidth = "2";
+      }
       const tt = svg("title");
-      tt.textContent = `Run ${run.id} (${run.model}) · token ${i + 1}: ${JSON.stringify(p.token)} — perplexity ${p.perp.toFixed(2)}`;
+      const modeNote =
+        mode === "rolling-max"
+          ? ` (rolling max=${p.yPerp.toFixed(2)})`
+          : "";
+      tt.textContent =
+        `Run ${run.id} (${run.model}) · token ${p.idx + 1}: ` +
+        `${JSON.stringify(p.token)} — perplexity ${p.rawPerp.toFixed(2)}${modeNote}`;
       dot.appendChild(tt);
       root.appendChild(dot);
     });
   }
 
   perplexityPlotEl.appendChild(root);
+};
+
+// Side-by-side comparison of every aggregate the per-token series can carry.
+// Highlights the best (lowest) and worst (highest) value per column so the
+// reader can spot which run wins on which metric — useful when geo.mean lies
+// to you about a localized spike in a long sequence.
+const METRIC_COLS = [
+  { key: "geoMean",      label: "geo.mean", fmt: (v) => v.toFixed(2) },
+  { key: "arithMean",    label: "mean",     fmt: (v) => v.toFixed(2) },
+  { key: "max",          label: "max",      fmt: (v) => v.toFixed(2) },
+  { key: "p95",          label: "p95",      fmt: (v) => v.toFixed(2) },
+  { key: "p99",          label: "p99",      fmt: (v) => v.toFixed(2) },
+  { key: "spikeCount",   label: `spikes (>${SPIKE_THRESHOLD})`, fmt: (v) => String(v) },
+  { key: "spikeDensity", label: "/100 tok", fmt: (v) => v.toFixed(1) },
+];
+
+const drawMetricsTable = () => {
+  metricsTableEl.innerHTML = "";
+  const visibleRuns = runs.filter((r) => r.visible && r.series.length > 0);
+  if (visibleRuns.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "metrics-table-empty";
+    empty.textContent = runs.length === 0
+      ? "Metrics will appear here once a run produces tokens."
+      : "No visible runs with tokens — toggle one on below.";
+    metricsTableEl.appendChild(empty);
+    return;
+  }
+
+  const rows = visibleRuns.map((r) => ({ run: r, m: computeRunMetrics(r.series) }));
+
+  // Per-column min/max for best/worst highlighting. Only meaningful with ≥2 runs.
+  const extremes = {};
+  if (rows.length >= 2) {
+    for (const col of METRIC_COLS) {
+      let lo = Infinity, hi = -Infinity;
+      for (const { m } of rows) {
+        const v = m[col.key];
+        if (v == null) continue;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+      if (lo !== hi) extremes[col.key] = { lo, hi };
+    }
+  }
+
+  const table = document.createElement("table");
+  table.className = "metrics-table-grid";
+
+  const thead = document.createElement("thead");
+  const hr = document.createElement("tr");
+  for (const h of ["Run", "Model", "tokens", ...METRIC_COLS.map((c) => c.label)]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const { run, m } of rows) {
+    const tr = document.createElement("tr");
+
+    const idCell = document.createElement("td");
+    idCell.className = "mt-run";
+    const sw = document.createElement("span");
+    sw.className = "swatch";
+    sw.style.background = run.color;
+    idCell.appendChild(sw);
+    idCell.appendChild(document.createTextNode(`#${run.id}`));
+    tr.appendChild(idCell);
+
+    const modelCell = document.createElement("td");
+    modelCell.className = "mt-model";
+    modelCell.textContent = run.model;
+    tr.appendChild(modelCell);
+
+    const tokCell = document.createElement("td");
+    tokCell.className = "mt-num";
+    tokCell.textContent = String(m.count);
+    tr.appendChild(tokCell);
+
+    for (const col of METRIC_COLS) {
+      const td = document.createElement("td");
+      td.className = "mt-num";
+      const v = m[col.key];
+      if (v == null) {
+        td.textContent = "—";
+      } else {
+        td.textContent = col.fmt(v);
+        const ex = extremes[col.key];
+        if (ex) {
+          if (v === ex.lo) td.classList.add("best");
+          else if (v === ex.hi) td.classList.add("worst");
+        }
+      }
+      tr.appendChild(td);
+    }
+
+    tbody.appendChild(tr);
+  }
+  table.appendChild(tbody);
+  metricsTableEl.appendChild(table);
+};
+
+const redrawMetrics = () => {
+  drawPerplexityPlot();
+  drawMetricsTable();
+  drawRunsLegend();
 };
 
 const drawRunsLegend = () => {
@@ -765,8 +1060,7 @@ const drawRunsLegend = () => {
   showAll.textContent = "Show all";
   showAll.addEventListener("click", () => {
     for (const r of runs) r.visible = true;
-    drawPerplexityPlot();
-    drawRunsLegend();
+    redrawMetrics();
   });
   const hideAll = document.createElement("button");
   hideAll.type = "button";
@@ -774,8 +1068,7 @@ const drawRunsLegend = () => {
   hideAll.textContent = "Hide all";
   hideAll.addEventListener("click", () => {
     for (const r of runs) r.visible = false;
-    drawPerplexityPlot();
-    drawRunsLegend();
+    redrawMetrics();
   });
   header.appendChild(showAll);
   header.appendChild(hideAll);
@@ -825,13 +1118,13 @@ const drawRunsLegend = () => {
     }
     item.appendChild(prompt);
 
-    const seqPerp = computeSeqPerp(run.series);
+    const m = computeRunMetrics(run.series);
     const perp = document.createElement("span");
     perp.className = "run-perp";
     perp.textContent =
-      seqPerp == null
-        ? `${run.series.length} tokens`
-        : `seq.perp = ${seqPerp.toFixed(2)} · ${run.series.length} tokens`;
+      m.geoMean == null
+        ? `${m.count} tokens`
+        : `seq.perp = ${m.geoMean.toFixed(2)} · ${m.count} tokens`;
     item.appendChild(perp);
 
     const del = document.createElement("button");
@@ -864,8 +1157,7 @@ const startRun = (model, prompt, scenarioLabel = null) => {
     visible: true,
   };
   runs.push(currentRun);
-  drawPerplexityPlot();
-  drawRunsLegend();
+  redrawMetrics();
 };
 
 const recordTokenForPerplexity = (tokenData) => {
@@ -876,15 +1168,15 @@ const recordTokenForPerplexity = (tokenData) => {
     perp,
     token: tokenData.token,
   });
-  drawPerplexityPlot();
-  drawRunsLegend();
+  // While fast-forwarding, skip the per-token plot rebuild — finishCurrentRun
+  // calls redrawMetrics() once when the loop ends, which is enough.
+  if (!fastForward) redrawMetrics();
 };
 
 const finishCurrentRun = () => {
   if (currentRun) currentRun.active = false;
   currentRun = null;
-  drawPerplexityPlot();
-  drawRunsLegend();
+  redrawMetrics();
 };
 
 const clearAllRuns = () => {
@@ -892,8 +1184,7 @@ const clearAllRuns = () => {
   runs.length = 0;
   currentRun = null;
   nextRunId = 1;
-  drawPerplexityPlot();
-  drawRunsLegend();
+  redrawMetrics();
 };
 
 const deleteRun = (run) => {
@@ -901,23 +1192,31 @@ const deleteRun = (run) => {
   if (idx < 0) return;
   runs.splice(idx, 1);
   if (currentRun === run) currentRun = null;
-  drawPerplexityPlot();
-  drawRunsLegend();
+  redrawMetrics();
 };
 
 const setRunVisibility = (run, visible) => {
   run.visible = visible;
-  drawPerplexityPlot();
-  drawRunsLegend();
+  redrawMetrics();
 };
 
 clearRunsBtn.addEventListener("click", clearAllRuns);
+plotMetricEl.addEventListener("change", drawPerplexityPlot);
 
 window.addEventListener("resize", () => drawPerplexityPlot());
 
 const animateToken = async (tokenData, idx, total) => {
   tokenIdxEl.textContent = `token ${idx + 1} / ${total}`;
   await waitIfPaused();
+
+  if (fastForward) {
+    // Skip the slot-machine roll and the bar-growing animation entirely; just
+    // record the result and yield so the response text can paint.
+    appendTokenToResponse(tokenData.token);
+    recordTokenForPerplexity(tokenData);
+    await sleep(0);
+    return;
+  }
 
   const { rows, chosenIdx } = renderDistribution(tokenData.top, tokenData.token);
 
@@ -946,30 +1245,47 @@ const reset = () => {
   lastSampledToken = null;
   // Note: perplexity runs are NOT cleared here. They're managed by
   // startRun (which obeys compare-mode) and the explicit Clear runs button.
-  drawPerplexityPlot();
-  drawRunsLegend();
+  redrawMetrics();
 };
 
-const renderPresetChips = () => {
-  for (const preset of PRESETS) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = `preset-chip ${preset.tag}`;
-    const tag = document.createElement("span");
-    tag.className = "chip-tag";
-    tag.textContent = preset.tag === "high" ? "high-H" : "low-H";
-    btn.appendChild(tag);
-    btn.appendChild(document.createTextNode(preset.label));
-    btn.title = preset.prompt;
-    btn.addEventListener("click", () => {
-      clearActiveScenario();
-      messageEl.value = preset.prompt;
-      messageEl.focus();
-    });
-    presetsEl.appendChild(btn);
-  }
+// Chip factories per category. Each returns a freshly-built <button> for one
+// example; the unified renderer below decides when (which tab is active).
+
+const renderPromptChip = (preset) => {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `preset-chip ${preset.tag}`;
+  const tag = document.createElement("span");
+  tag.className = "chip-tag";
+  tag.textContent = preset.tag === "high" ? "high-H" : "low-H";
+  btn.appendChild(tag);
+  btn.appendChild(document.createTextNode(preset.label));
+  btn.title = preset.prompt;
+  btn.addEventListener("click", () => {
+    clearActiveScenario();
+    messageEl.value = preset.prompt;
+    messageEl.focus();
+  });
+  return btn;
 };
-renderPresetChips();
+
+const renderPuzzleChip = (pz) => {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "preset-chip puzzle";
+  const tag = document.createElement("span");
+  tag.className = "chip-tag";
+  tag.textContent = pz.lang;
+  btn.appendChild(tag);
+  btn.appendChild(document.createTextNode(pz.label));
+  btn.title = pz.prompt.slice(0, 140) + "…";
+  btn.addEventListener("click", () => {
+    clearActiveScenario();
+    messageEl.value = pz.prompt;
+    messageEl.focus();
+  });
+  return btn;
+};
 
 // ────────── Chatbot scenario state + UI ──────────
 let activeScenario = null;
@@ -1037,32 +1353,58 @@ const clearActiveScenario = () => {
   renderScenarioContext(null);
 };
 
-const renderChatbotChips = () => {
-  for (const sc of CHATBOT_SCENARIOS) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = `preset-chip chatbot ${sc.sysVariant}`;
-    btn.title = `${sc.sysVariant} system prompt · ${sc.history.length} turns of history`;
+const renderChatbotChip = (sc) => {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = `preset-chip chatbot ${sc.sysVariant}`;
+  btn.title = `${sc.sysVariant} system prompt · ${sc.history.length} turns of history`;
 
-    const axes = document.createElement("span");
-    axes.className = "chip-axes";
-    const axSys = document.createElement("span");
-    axSys.className = `ax-sys ${sc.sysVariant}`;
-    axSys.textContent = sc.sysVariant === "compact" ? "S" : "S+";
-    const axHist = document.createElement("span");
-    axHist.className = "ax-hist";
-    axHist.textContent = sc.histVariant === "short" ? "▪" : "▪▪▪";
-    axes.appendChild(axSys);
-    axes.appendChild(axHist);
-    btn.appendChild(axes);
-    btn.appendChild(document.createTextNode(sc.label));
+  const axes = document.createElement("span");
+  axes.className = "chip-axes";
+  const axSys = document.createElement("span");
+  axSys.className = `ax-sys ${sc.sysVariant}`;
+  axSys.textContent = sc.sysVariant === "compact" ? "S" : "S+";
+  const axHist = document.createElement("span");
+  axHist.className = "ax-hist";
+  axHist.textContent = sc.histVariant === "short" ? "▪" : "▪▪▪";
+  axes.appendChild(axSys);
+  axes.appendChild(axHist);
+  btn.appendChild(axes);
+  btn.appendChild(document.createTextNode(sc.label));
 
-    btn.addEventListener("click", () => setActiveScenario(sc));
-    scenarioChipEls.set(sc.id, btn);
-    chatbotPresetsEl.appendChild(btn);
-  }
+  if (activeScenario && activeScenario.id === sc.id) btn.classList.add("active");
+  btn.addEventListener("click", () => setActiveScenario(sc));
+  scenarioChipEls.set(sc.id, btn);
+  return btn;
 };
-renderChatbotChips();
+
+// Single registry + tab switcher. Re-rendering chips on every tab change is
+// cheap and keeps the "which chatbot chip is active" outline correct without
+// special-case bookkeeping.
+const CATEGORIES = [
+  { id: "prompts", items: PRESETS,           render: renderPromptChip  },
+  { id: "chatbot", items: CHATBOT_SCENARIOS, render: renderChatbotChip },
+  { id: "puzzles", items: PUZZLES,           render: renderPuzzleChip  },
+];
+
+const showCategory = (catId) => {
+  for (const t of examplesTabsEl.querySelectorAll(".ex-tab")) {
+    t.classList.toggle("active", t.dataset.cat === catId);
+  }
+  examplesChipsEl.innerHTML = "";
+  // Chatbot chip nodes are tracked by id for the "active" outline. Old nodes
+  // become detached on tab switch — drop the map so we never style stale ones.
+  scenarioChipEls.clear();
+  const cat = CATEGORIES.find((c) => c.id === catId);
+  if (!cat) return;
+  for (const item of cat.items) examplesChipsEl.appendChild(cat.render(item));
+};
+
+examplesTabsEl.addEventListener("click", (e) => {
+  const t = e.target.closest(".ex-tab");
+  if (t && t.dataset.cat) showCategory(t.dataset.cat);
+});
+showCategory("prompts");
 
 // Manual edits to the textarea drop the active scenario so we don't ship
 // a bloated context with a freely-typed message.
@@ -1077,9 +1419,15 @@ const setBusy = (busy) => {
   messageEl.disabled = busy;
   pauseBtn.disabled = !busy;
   stepBtn.disabled = true; // only enabled while paused
-  if (!busy) {
+  fastForwardBtn.disabled = !busy;
+  fastForwardBtn.textContent = "⏭ Skip anim";
+  if (busy) {
+    // Reset fast-forward at the start of each run; it's a one-shot flag.
+    fastForward = false;
+  } else {
     paused = false;
     pauseBtn.textContent = "Pause";
+    fastForward = false;
   }
 };
 
