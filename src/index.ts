@@ -62,7 +62,8 @@ const isValidHistory = (h: unknown): h is HistoryTurn[] =>
       t &&
       typeof t === "object" &&
       (t as HistoryTurn).role !== undefined &&
-      ((t as HistoryTurn).role === "user" || (t as HistoryTurn).role === "assistant") &&
+      ((t as HistoryTurn).role === "user" ||
+        (t as HistoryTurn).role === "assistant") &&
       typeof (t as HistoryTurn).content === "string",
   );
 
@@ -76,7 +77,8 @@ const handleGenerate = async (req: Request, env: Env): Promise<Response> => {
 
   // Server-configured key wins. Browser-supplied key is the fallback so
   // hosted demos can offer "bring your own key" without a redeploy.
-  const serverKey = typeof env.OPENAI_API_KEY === "string" ? env.OPENAI_API_KEY.trim() : "";
+  const serverKey =
+    typeof env.OPENAI_API_KEY === "string" ? env.OPENAI_API_KEY.trim() : "";
   const clientKey = typeof body.apiKey === "string" ? body.apiKey.trim() : "";
   const apiKey = serverKey || clientKey;
   if (!apiKey) {
@@ -86,7 +88,10 @@ const handleGenerate = async (req: Request, env: Env): Promise<Response> => {
     );
   }
   if (!apiKey.startsWith("sk-")) {
-    return json({ error: "OpenAI API key must start with 'sk-'" }, { status: 400 });
+    return json(
+      { error: "OpenAI API key must start with 'sk-'" },
+      { status: 400 },
+    );
   }
 
   const message = (body.message ?? "").trim();
@@ -98,7 +103,10 @@ const handleGenerate = async (req: Request, env: Env): Promise<Response> => {
   const system = typeof body.system === "string" ? body.system : undefined;
   if (body.history !== undefined && !isValidHistory(body.history)) {
     return json(
-      { error: "history must be an array of { role: 'user'|'assistant', content: string }" },
+      {
+        error:
+          "history must be an array of { role: 'user'|'assistant', content: string }",
+      },
       { status: 400 },
     );
   }
@@ -122,10 +130,11 @@ const handleGenerate = async (req: Request, env: Env): Promise<Response> => {
         model,
         messages,
         logprobs: true,
-        top_logprobs: 10,
-        max_tokens: maxTokens,
-        // Gen 5 models reason by default; reasoning suppresses logprobs. Disable it.
-        ...(isGen5Model(model) ? { reasoning: "none" } : {}),
+        top_logprobs: 5,
+        // Gen 5 rejects max_tokens and requires max_completion_tokens instead.
+        ...(isGen5Model(model)
+          ? { max_completion_tokens: maxTokens, reasoning_effort: "none" }
+          : { max_tokens: maxTokens }),
       }),
     });
   } catch (err) {
@@ -136,7 +145,9 @@ const handleGenerate = async (req: Request, env: Env): Promise<Response> => {
   if (!upstream.ok) {
     let upstreamMsg = `OpenAI error ${upstream.status}`;
     try {
-      const errBody = (await upstream.json()) as { error?: { message?: string } };
+      const errBody = (await upstream.json()) as {
+        error?: { message?: string };
+      };
       if (errBody?.error?.message) upstreamMsg = errBody.error.message;
     } catch {}
     if (upstream.status === 401) {
@@ -158,7 +169,9 @@ export default {
       return handleGenerate(req, env);
     }
     if (req.method === "GET" && url.pathname === "/config") {
-      const hasServerKey = typeof env.OPENAI_API_KEY === "string" && env.OPENAI_API_KEY.trim().length > 0;
+      const hasServerKey =
+        typeof env.OPENAI_API_KEY === "string" &&
+        env.OPENAI_API_KEY.trim().length > 0;
       return json({ hasServerKey });
     }
     return new Response("Not found", { status: 404 });
